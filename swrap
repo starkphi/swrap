@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+export ICON4PY_PATH=$SCRATCH/icon4py
+export SBATCH_UENV=icon/25.6:v2
+export SBATCH_UENV_VIEW=default
+
+uenv run $SBATCH_UENV --view=$SBATCH_UENV_VIEW -- "$ICON4PY_PATH/.venv/bin/python" "$SCRIPT_DIR/swrap.py" "$@"
+
