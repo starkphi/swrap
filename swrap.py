@@ -207,6 +207,12 @@ class SlurmScript:
             log.info("Exit code:", error.returncode)
             log.info("Error:", error.stderr.strip())
 
+    def save(self):
+        derived_name = self.jobname_default + ".slurm"
+        with open(derived_name, "w") as f:
+            f.write(self.slurm_script)
+        log.info(f"Saved script to '{derived_name}'")
+
 @click.command()
 @click.argument("scriptname")
 @click.option(
@@ -244,31 +250,34 @@ def main(
     sls.build_slurm_script()
 
     collected_logs=get_log_history()
+    str_for_pager = collected_logs + f"{'#'*10} begin slurm script:{'#'*10}\n\n" + sls.slurm_script
 
     if dry_run:
-
-        str_for_pager = collected_logs + f"{'#'*10} begin slurm script:{'#'*10}\n\n" + sls.slurm_script
-
         click.echo_via_pager(str_for_pager)
         if save:
             in_str = input("Ok with that? [y]\n")
             if not "y" in in_str and in_str != "":
                 log.info("Not saved.")
-                return
+            else:
+                sls.save()
     else:
+        do_run = False
         in_str = input("Run script? [y]/p (preview)\n")
         if "y" in in_str or in_str == "":
-            sls.submit_script()
+            do_run = True
         elif "p" in in_str:
             click.echo_via_pager(sls.slurm_script)
+            in_str = input("Run script? [y]\n")
+            if "y" in in_str or in_str == "":
+                do_run = True
+
+        if do_run:
+            sls.submit_script()
+            if save:
+                sls.save()
         else:
             log.info("Not run.")
 
-    if save:
-        derived_name = sls.jobname_default + ".slurm"
-        with open(derived_name, "w") as f:
-            f.write(sls.slurm_script)
-        log.info(f"Saved script to '{derived_name}'")
 
 
 
