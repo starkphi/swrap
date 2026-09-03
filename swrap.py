@@ -86,7 +86,9 @@ class SlurmScript:
 
     def set_defaults(self, sbatch_dict: dict):
         sbatch_dict.setdefault("uenv", os.environ["SBATCH_UENV"])
-        sbatch_dict.setdefault("view", os.environ["SBATCH_UENV_VIEW"])
+        view_from_env_var = os.environ["SBATCH_UENV_VIEW"]
+        if view_from_env_var != "none":
+            sbatch_dict.setdefault("view", view_from_env_var)
         sbatch_dict.setdefault("job-name", self.jobname_default)
         sbatch_dict.setdefault("output", sbatch_dict["job-name"] + "_%j.out")
         sbatch_dict.setdefault("error", sbatch_dict["job-name"] + "_%j.err")

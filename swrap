@@ -7,7 +7,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)"
 
 export ICON4PY_PATH=$SCRATCH/icon4py
 export SBATCH_UENV=icon/26.7:rc1
-export SBATCH_UENV_VIEW=default
+export SBATCH_UENV_VIEW=none
 
-uenv run $SBATCH_UENV --view=$SBATCH_UENV_VIEW -- "$ICON4PY_PATH/.venv/bin/python" "$SCRIPT_DIR/swrap.py" "$@"
+uenv run $SBATCH_UENV -- "$ICON4PY_PATH/.venv/bin/python" "$SCRIPT_DIR/swrap.py" "$@"
 
