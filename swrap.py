@@ -7,6 +7,47 @@ import textwrap
 
 import click
 
+import logging
+import io
+
+
+def get_logger_incl_getter():
+    log = logging.getLogger(__name__)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+    formatter = logging.Formatter("%(message)s")
+
+    # Print to terminal
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    # Store in memory
+    string_handler = StringHandler()
+    string_handler.setFormatter(formatter)
+
+    log.addHandler(console_handler)
+    log.addHandler(string_handler)
+    return log, string_handler.get_string
+
+class StringHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.output = io.StringIO()
+
+    def emit(self, record):
+        message = self.format(record)
+        self.output.write(message + "\n")
+
+    def get_string(self):
+        return self.output.getvalue()
+
+    def close(self):
+        self.output.close()
+        super().close()
+
+log, get_log_history = get_logger_incl_getter()
+
 class SlurmScript:
     def __init__(self, script_path, backend, precision, is_dryrun):
         self.backend = backend
@@ -16,14 +57,19 @@ class SlurmScript:
         assert self.script_path.is_file()
         with open(self.script_path, "r") as file:
             self.raw_script = file.read()
-        self.slurm_script = ""
 
+        self.icon_env_vars: dict = self.decide_precision()
+        self.slurm_script = ""
+        
         self.jobname_default = self.script_path.stem + "_" + self.precision + "_" + self.backend
+
+
 
     def prep_preamble_and_body(self) -> tuple[str, str]:
         sbatch_lines, reg_lines = [],[]
         [(reg_lines, sbatch_lines)[line[:7] == "#SBATCH"].append(line) for line in self.raw_script.split("\n")]
         shebang = "" if reg_lines[0][:3] != "#!/" else reg_lines.pop(0)
+
         body = "\n".join(reg_lines)
         body = body.replace("${BACKEND_NAME}", "dace").replace("${BACKEND_XPU}", "cpu")
 
@@ -65,21 +111,53 @@ class SlurmScript:
     def make_sbatch_block(self, sbatch_dict: dict) -> str:
         return "\n".join(["#SBATCH --" + key + "=" + str(value) for (key,value) in sbatch_dict.items()])
 
-    def get_icon4py_env_vars(self) -> str:
-        env_dict = os.environ.copy()
-        if "ICON4PY_FLOAT_PRECISION" in env_dict.keys() and env_dict['ICON4PY_FLOAT_PRECISION'] != self.precision:
-            print(f"Ignoring the 'ICON4PY_FLOAT_PRECISION={env_dict['ICON4PY_FLOAT_PRECISION']}' environment variable.", end=" ")
-            env_dict['ICON4PY_FLOAT_PRECISION'] = self.precision
-            print(f"Stick to swrap argument. -> 'ICON4PY_FLOAT_PRECISION={self.precision}'")
+    def decide_precision(self) -> dict:
+        env_var_name = "ICON4PY_FLOAT_PRECISION"
+        env_dict = dict((key,val) for key,val in os.environ.items() if "ICON4PY" in key)
 
-        lines = [key + "=" + val for key,val in env_dict.items() if "ICON4PY" in key]
+        lines = self.raw_script.splitlines()
+        float_precision_line = ""
+        for i, line in enumerate(lines):
+            if env_var_name in line:
+                float_precision_line = lines.pop(i)
+                self.raw_script = "\n".join(lines)
+                break
+
+        if self.precision:
+            if env_var_name in env_dict or float_precision_line:
+                log.info(f"rem: precision '{self.precision}' from command line argument overwrites existing env var or setting env vars in template script")
+        elif env_var_name in env_dict:
+            self.precision = env_dict[env_var_name]
+            if float_precision_line:
+                log.info(f"rem: existing env var ICON4PY_FLOAT_PRECISION={self.precision} from command line argument overwrites vars in template script")
+        elif float_precision_line:
+            start_prec_str = float_precision_line.find(env_var_name) + len(env_var_name) + 1
+            self.precision = float_precision_line[start_prec_str:].replace('"','')
+        else:
+            self.precision = "double"
+            log.info("rem: no precision setting provided nor found in env var or file -> set default: 'double'")
+        env_dict[env_var_name] = self.precision
+        return env_dict
+
+    def get_icon4py_env_vars(self) -> str:
+        # env_dict = os.environ.copy()
+        # log.info("####")
+        # log.info("\n".join([f"{key}: {val}" for key,val in env_dict.items() if "ICON4PY" in key]))
+        # log.info("####")
+        # if "ICON4PY_FLOAT_PRECISION" in env_dict.keys() and env_dict['ICON4PY_FLOAT_PRECISION'] != self.precision:
+        #     log.info(f"Ignoring the 'ICON4PY_FLOAT_PRECISION={env_dict['ICON4PY_FLOAT_PRECISION']}' environment variable.", end=" ")
+        #     env_dict['ICON4PY_FLOAT_PRECISION'] = self.precision
+        #     log.info(f"Stick to swrap argument. -> 'ICON4PY_FLOAT_PRECISION={self.precision}'")
+
+        # lines = [key + "=" + val for key,val in env_dict.items() if "ICON4PY" in key]
+        lines = [key + "=" + val for key,val in self.icon_env_vars.items() if "ICON4PY" in key]
         if lines:
             return "\n".join(lines) + "\n"*2
         else:
             return ""
 
     def build_slurm_script(self) -> str:
-        print("Build slurm script")
+        log.info("Build slurm script")
         preamble, body = self.prep_preamble_and_body()
 
         begin_msg = rf"""printf '%s\n%s\n' "This script was generated from: {self.script_path.name} with backend={self.backend} and precision={self.precision}" "Start script - $(date '+%d.%m.%Y %H:%M:%S')" | tee -a /dev/stderr    # write to both outputs""" + "\n"*3
@@ -121,18 +199,18 @@ class SlurmScript:
                     check=True,
                 )
 
-            print(result.stdout.strip())
+            log.info(result.stdout.strip())
 
         except subprocess.CalledProcessError as error:
-            print("sbatch submission failed.")
-            print("Exit code:", error.returncode)
-            print("Error:", error.stderr.strip())
+            log.info("sbatch submission failed.")
+            log.info("Exit code:", error.returncode)
+            log.info("Error:", error.stderr.strip())
 
 @click.command()
 @click.argument("scriptname")
 @click.option(
     "--precision",
-    default="double",
+    default="",
     type=click.Choice(["single", "mixed", "double"]),
     help="The floating-point precision to use, default=double.",
 )
@@ -164,16 +242,32 @@ def main(
     sls = SlurmScript(scriptname, backend, precision, dry_run)
     sls.build_slurm_script()
 
+    collected_logs=get_log_history()
+
     if dry_run:
-        click.echo_via_pager(sls.slurm_script)
+
+        str_for_pager = collected_logs + f"{'#'*10} begin slurm script:{'#'*10}\n\n" + sls.slurm_script
+
+        click.echo_via_pager(str_for_pager)
+        if save:
+            in_str = input("Ok with that? [y]\n")
+            if not "y" in in_str and in_str != "":
+                log.info("Not saved.")
+                return
     else:
-        sls.submit_script()
+        in_str = input("Run script? [y]/p (preview)\n")
+        if "y" in in_str or in_str == "":
+            sls.submit_script()
+        elif "p" in in_str:
+            click.echo_via_pager(sls.slurm_script)
+        else:
+            log.info("Not run.")
 
     if save:
         derived_name = sls.jobname_default + ".slurm"
         with open(derived_name, "w") as f:
             f.write(sls.slurm_script)
-        print(f"Saved script to '{derived_name}'")
+        log.info(f"Saved script to '{derived_name}'")
 
 
 
