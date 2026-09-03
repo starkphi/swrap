@@ -8,18 +8,19 @@ import textwrap
 import click
 
 class SlurmScript:
-    def __init__(self, script_path, backend, is_dryrun):
+    def __init__(self, script_path, backend, precision, is_dryrun):
         self.backend = backend
         self.backend_name, self.backend_xpu = backend.split("_")
+        self.precision = precision
         self.script_path = pathlib.Path(script_path)
         assert self.script_path.is_file()
         with open(self.script_path, "r") as file:
             self.raw_script = file.read()
-        self.slurm_script = None
+        self.slurm_script = ""
 
-        self.jobname_default = self.script_path.stem + "_" + self.backend
+        self.jobname_default = self.script_path.stem + "_" + self.precision + "_" + self.backend
 
-    def prep_preamble_and_body(self) -> str:
+    def prep_preamble_and_body(self) -> tuple[str, str]:
         sbatch_lines, reg_lines = [],[]
         [(reg_lines, sbatch_lines)[line[:7] == "#SBATCH"].append(line) for line in self.raw_script.split("\n")]
         shebang = "" if reg_lines[0][:3] != "#!/" else reg_lines.pop(0)
@@ -50,7 +51,7 @@ class SlurmScript:
 
 
         defaultpartitions = {"santis": {"cpu": "debug", "gpu": "debug"},
-                             "balfrin": {"cpu": "debug", "gpu": "normal"}}
+                             "balfrin": {"cpu": "pp-short", "gpu": "debug"}}
         host = os.environ["HOSTNAME"].split("-")[0]
         sbatch_dict.setdefault("partition", defaultpartitions[host][self.backend_xpu])
         if self.backend_xpu == "gpu":
@@ -65,19 +66,23 @@ class SlurmScript:
         return "\n".join(["#SBATCH --" + key + "=" + str(value) for (key,value) in sbatch_dict.items()])
 
     def get_icon4py_env_vars(self) -> str:
-        lines = [key + "=" + val for key,val in os.environ.items() if "ICON4PY" in key]
-        # lines.append(f"\nBACKEND_XPU={self.backend_xpu}")
-        # lines.append(f"BACKEND_NAME={self.backend_name}")
+        env_dict = os.environ.copy()
+        if "ICON4PY_FLOAT_PRECISION" in env_dict.keys() and env_dict['ICON4PY_FLOAT_PRECISION'] != self.precision:
+            print(f"Ignoring the 'ICON4PY_FLOAT_PRECISION={env_dict['ICON4PY_FLOAT_PRECISION']}' environment variable.", end=" ")
+            env_dict['ICON4PY_FLOAT_PRECISION'] = self.precision
+            print(f"Stick to swrap argument. -> 'ICON4PY_FLOAT_PRECISION={self.precision}'")
+
+        lines = [key + "=" + val for key,val in env_dict.items() if "ICON4PY" in key]
         if lines:
             return "\n".join(lines) + "\n"*2
         else:
-            ""
+            return ""
 
     def build_slurm_script(self) -> str:
         print("Build slurm script")
         preamble, body = self.prep_preamble_and_body()
 
-        begin_msg = rf"""printf '%s\n%s\n' "This script was generated from: {self.script_path.name} with backend={self.backend}" "Start script - $(date '+%d.%m.%Y %H:%M:%S')" | tee /dev/stderr    # write to both outputs""" + "\n"*3
+        begin_msg = rf"""printf '%s\n%s\n' "This script was generated from: {self.script_path.name} with backend={self.backend} and precision={self.precision}" "Start script - $(date '+%d.%m.%Y %H:%M:%S')" | tee -a /dev/stderr    # write to both outputs""" + "\n"*3
 
 
         job_summary = textwrap.dedent(r"""
@@ -85,7 +90,7 @@ class SlurmScript:
 
             # errors occured?
             if [[ $status -ne 0 ]]; then
-                printf '\n\n\n%s\n\n' '** Exited with error. **' | tee /dev/stderr
+                printf '\n\n\n%s\n\n' '** Exited with error. **' | tee -a /dev/stderr
             fi
 
             # job time summary
@@ -95,14 +100,14 @@ class SlurmScript:
             fi
 
             # end time to both outputs
-            printf '\n%s\n' "Job completed  - $(date '+%d.%m.%Y %H:%M:%S')" | tee /dev/stderr
+            printf '\n%s\n' "Job completed  - $(date '+%d.%m.%Y %H:%M:%S')" | tee -a /dev/stderr
         """)
 
         self.slurm_script = preamble + begin_msg + body + job_summary
         return self.slurm_script
 
     def submit_script(self) -> None:
-        if self.slurm_script is None:
+        if not self.slurm_script:
             self.build_slurm_script()
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".slurm") as f:
@@ -126,6 +131,12 @@ class SlurmScript:
 @click.command()
 @click.argument("scriptname")
 @click.option(
+    "--precision",
+    default="double",
+    type=click.Choice(["single", "mixed", "double"]),
+    help="The floating-point precision to use, default=double.",
+)
+@click.option(
     "--backend",
     default="dace_cpu",
     type=click.Choice(["dace_cpu", "dace_gpu", "gtfn_cpu", "gtfn_gpu"]),
@@ -146,10 +157,11 @@ class SlurmScript:
 def main(
     scriptname: str,
     backend: str,
+    precision: str,
     dry_run: bool,
     save: bool
 ):
-    sls = SlurmScript(scriptname, backend, dry_run)
+    sls = SlurmScript(scriptname, backend, precision, dry_run)
     sls.build_slurm_script()
 
     if dry_run:
