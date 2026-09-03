@@ -241,12 +241,20 @@ class SlurmScript:
     default=False,
     help="With this marker set, the generated script is saved to disk.",
 )
+@click.option(
+    "-f",
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Skip all confirmation prompts.",
+)
 def main(
     scriptname: str,
     backend: str,
     precision: str,
     dry_run: bool,
-    save: bool
+    save: bool,
+    force: bool
 ):
     sls = SlurmScript(scriptname, backend, precision, dry_run)
     sls.build_slurm_script()
@@ -257,21 +265,25 @@ def main(
     if dry_run:
         click.echo_via_pager(str_for_pager)
         if save:
+            if force:
+                sls.save()
+                return
             in_str = input("Ok with that? [y]\n")
             if not "y" in in_str and in_str != "":
                 log.info("Not saved.")
             else:
                 sls.save()
     else:
-        do_run = False
-        in_str = input("Run script? [y]/p (preview)\n")
-        if "y" in in_str or in_str == "":
-            do_run = True
-        elif "p" in in_str:
-            click.echo_via_pager(sls.slurm_script)
-            in_str = input("Run script? [y]\n")
+        do_run = force
+        if not force:
+            in_str = input("Run script? [y]/p (preview)\n")
             if "y" in in_str or in_str == "":
                 do_run = True
+            elif "p" in in_str:
+                click.echo_via_pager(sls.slurm_script)
+                in_str = input("Run script? [y]\n")
+                if "y" in in_str or in_str == "":
+                    do_run = True
 
         if do_run:
             sls.submit_script()
