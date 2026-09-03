@@ -97,7 +97,8 @@ class SlurmScript:
 
 
         defaultpartitions = {"santis": {"cpu": "debug", "gpu": "debug"},
-                             "balfrin": {"cpu": "pp-short", "gpu": "debug"}}
+                             "balfrin": {"cpu": "pp-short", "gpu": "debug"},
+                             "linard": {"cpu": "pp-short", "gpu": "debug"}}
         host = os.environ["HOSTNAME"].split("-")[0]
         sbatch_dict.setdefault("partition", defaultpartitions[host][self.backend_xpu])
         if self.backend_xpu == "gpu":
