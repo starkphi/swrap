@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)"
 
 export ICON4PY_PATH=$SCRATCH/icon4py
-export SBATCH_UENV=icon/25.2:v3
+export SBATCH_UENV=icon/26.7:rc1
 export SBATCH_UENV_VIEW=default
 
 uenv run $SBATCH_UENV --view=$SBATCH_UENV_VIEW -- "$ICON4PY_PATH/.venv/bin/python" "$SCRIPT_DIR/swrap.py" "$@"
