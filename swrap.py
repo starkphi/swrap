@@ -65,11 +65,11 @@ class SlurmScript:
         reg_lines, preamble_lines = [],[]
         [(reg_lines, preamble_lines)[line[:7] in ["#SBATCH","#SWRAP_"]].append(line) for line in self.raw_script.split("\n")]
         shebang = "" if reg_lines[0][:3] != "#!/" else reg_lines.pop(0)
-
-        sbatch_lines = self.extract_swrap_vars(preamble_lines)
-
         body = "\n".join(reg_lines)
-        body = body.replace("${BACKEND_NAME}",  self.backend_name).replace("${BACKEND_XPU}", self.backend_xpu)
+
+        sbatch_lines = self.extract_swrap_and_env_vars(preamble_lines)
+
+        self.jobname_default = self.script_path.stem + (f"_{self.precision}" if self.precision != "NO" else "") + (f"_{self.backend}" if self.backend != "NO" else "")
 
         sbatch_dict = self.dict_from_sbatch_lines(sbatch_lines)
         sbatch_combined = self.set_defaults(sbatch_dict)
@@ -79,7 +79,7 @@ class SlurmScript:
 
         return preamble, body
 
-    def extract_swrap_vars(self, preamble_lines: list[str]) -> list[str]:
+    def extract_swrap_and_env_vars(self, preamble_lines: list[str]) -> list[str]:
         for k in range(len(preamble_lines), 0, -1):
             if "SWRAP" in preamble_lines[k-1]:
                 var = preamble_lines.pop(k-1)
@@ -91,6 +91,7 @@ class SlurmScript:
                     case _:
                         raise ValueError(f"Preamble comment '{var}' not configured.")
 
+        self.icon_env_vars: dict = self.extract_env_vars_and_decide_precision()
         return preamble_lines
 
     def dict_from_sbatch_lines(self, lines):
@@ -128,7 +129,7 @@ class SlurmScript:
     def make_sbatch_block(self, sbatch_dict: dict) -> str:
         return "\n".join(["#SBATCH --" + key + "=" + str(value) for (key,value) in sbatch_dict.items()])
 
-    def decide_precision(self) -> dict:
+    def extract_env_vars_and_decide_precision(self) -> dict:
         env_var_name = "ICON4PY_FLOAT_PRECISION"
         env_dict = {key: val for key,val in os.environ.items() if "ICON4PY" in key}
 
@@ -153,7 +154,10 @@ class SlurmScript:
         else:
             self.precision = "double"
             log.info("rem: no precision setting provided nor found in env var or file -> set default: 'double'")
-        env_dict[env_var_name] = self.precision
+        if self.precision != "NO":
+            env_dict[env_var_name] = self.precision
+        elif env_var_name in env_dict:
+            del env_dict[env_var_name]
         return env_dict
 
     def get_icon4py_env_vars(self) -> str:
@@ -168,6 +172,8 @@ class SlurmScript:
 
         # lines = [key + "=" + val for key,val in env_dict.items() if "ICON4PY" in key]
         lines = ["export " + key + "=" + val for key,val in self.icon_env_vars.items() if "ICON4PY" in key]
+        if self.backend != "NO":
+            lines += [f"BACKEND={self.backend}", f"BACKEND_NAME={self.backend_name}", f"BACKEND_XPU={self.backend_xpu}"]
         if lines:
             return "\n".join(lines) + "\n"*2
         else:
@@ -175,15 +181,20 @@ class SlurmScript:
 
     def build_slurm_script(self) -> str:
 
-        self.icon_env_vars: dict = self.decide_precision()
-
-        self.jobname_default = self.script_path.stem + "_" + self.precision + "_" + self.backend
 
         
         log.info("Build slurm script")
         preamble, body = self.prep_preamble_and_body()
 
-        begin_msg = rf"""printf '%s\n%s\n' "This script was generated from: {self.script_path.name} with backend={self.backend} and precision={self.precision}" "Start script - $(date '+%d.%m.%Y %H:%M:%S')" | tee -a /dev/stderr    # write to both outputs""" + "\n"*3
+        with_msg = []
+        for attr in ["backend", "precision"]:
+            val = getattr(self, attr)
+            if val != "NO":
+                with_msg.append(f" {attr}={val} ")
+        with_msg = "and".join(with_msg)
+        with_msg = "with" + with_msg if with_msg else ""
+
+        begin_msg = rf"""printf '%s\n%s\n' "This script was generated from: {self.script_path.name} {with_msg}" "Start script - $(date '+%d.%m.%Y %H:%M:%S')" | tee -a /dev/stderr    # write to both outputs""" + "\n"*3
 
 
         job_summary = textwrap.dedent(r"""
