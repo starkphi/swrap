@@ -58,20 +58,18 @@ class SlurmScript:
         with open(self.script_path, "r") as file:
             self.raw_script = file.read()
 
-        self.icon_env_vars: dict = self.decide_precision()
         self.slurm_script = ""
-        
-        self.jobname_default = self.script_path.stem + "_" + self.precision + "_" + self.backend
-
-
+        self.build_slurm_script()
 
     def prep_preamble_and_body(self) -> tuple[str, str]:
-        sbatch_lines, reg_lines = [],[]
-        [(reg_lines, sbatch_lines)[line[:7] == "#SBATCH"].append(line) for line in self.raw_script.split("\n")]
+        reg_lines, preamble_lines = [],[]
+        [(reg_lines, preamble_lines)[line[:7] in ["#SBATCH","#SWRAP_"]].append(line) for line in self.raw_script.split("\n")]
         shebang = "" if reg_lines[0][:3] != "#!/" else reg_lines.pop(0)
 
+        sbatch_lines = self.extract_swrap_vars(preamble_lines)
+
         body = "\n".join(reg_lines)
-        body = body.replace("${BACKEND_NAME}", "dace").replace("${BACKEND_XPU}", "cpu")
+        body = body.replace("${BACKEND_NAME}",  self.backend_name).replace("${BACKEND_XPU}", self.backend_xpu)
 
         sbatch_dict = self.dict_from_sbatch_lines(sbatch_lines)
         sbatch_combined = self.set_defaults(sbatch_dict)
@@ -81,13 +79,29 @@ class SlurmScript:
 
         return preamble, body
 
+    def extract_swrap_vars(self, preamble_lines: list[str]) -> list[str]:
+        for k in range(len(preamble_lines), 0, -1):
+            if "SWRAP" in preamble_lines[k-1]:
+                var = preamble_lines.pop(k-1)
+                match var[7:]:
+                    case "NO_PRECISION":
+                        self.precision = "NO"
+                    case "NO_BACKEND":
+                        self.backend = "NO"
+                    case _:
+                        raise ValueError(f"Preamble comment '{var}' not configured.")
+
+        return preamble_lines
+
     def dict_from_sbatch_lines(self, lines):
         return dict(line.split("--")[1].split("=") for line in lines)
 
     def set_defaults(self, sbatch_dict: dict):
         sbatch_dict.setdefault("uenv", os.environ["SBATCH_UENV"])
         view_from_env_var = os.environ["SBATCH_UENV_VIEW"]
-        if view_from_env_var != "none":
+        if view_from_env_var == "none":
+            del os.environ["SBATCH_UENV_VIEW"]
+        else:
             sbatch_dict.setdefault("view", view_from_env_var)
         sbatch_dict.setdefault("job-name", self.jobname_default)
         sbatch_dict.setdefault("output", sbatch_dict["job-name"] + "_%j.out")
@@ -105,10 +119,10 @@ class SlurmScript:
         sbatch_dict.setdefault("partition", defaultpartitions[host][self.backend_xpu])
         if self.backend_xpu == "gpu":
             sbatch_dict.setdefault("gres", "gpu:1")
-        if host == "santis":
-            sbatch_dict.setdefault("account", "cwd01")
         elif self.backend_xpu != "cpu":
             raise ValueError(f"'{self.backend_xpu}' is no valid processing unit.")
+        if host == "santis":
+            sbatch_dict.setdefault("account", "cwd01")
         return sbatch_dict
 
     def make_sbatch_block(self, sbatch_dict: dict) -> str:
@@ -116,12 +130,12 @@ class SlurmScript:
 
     def decide_precision(self) -> dict:
         env_var_name = "ICON4PY_FLOAT_PRECISION"
-        env_dict = dict((key,val) for key,val in os.environ.items() if "ICON4PY" in key)
+        env_dict = {key: val for key,val in os.environ.items() if "ICON4PY" in key}
 
         lines = self.raw_script.splitlines()
         float_precision_line = ""
         for i, line in enumerate(lines):
-            if env_var_name in line:
+            if (env_var_name + "=") in line:
                 float_precision_line = lines.pop(i)
                 self.raw_script = "\n".join(lines)
                 break
@@ -153,13 +167,19 @@ class SlurmScript:
         #     log.info(f"Stick to swrap argument. -> 'ICON4PY_FLOAT_PRECISION={self.precision}'")
 
         # lines = [key + "=" + val for key,val in env_dict.items() if "ICON4PY" in key]
-        lines = [key + "=" + val for key,val in self.icon_env_vars.items() if "ICON4PY" in key]
+        lines = ["export " + key + "=" + val for key,val in self.icon_env_vars.items() if "ICON4PY" in key]
         if lines:
             return "\n".join(lines) + "\n"*2
         else:
             return ""
 
     def build_slurm_script(self) -> str:
+
+        self.icon_env_vars: dict = self.decide_precision()
+
+        self.jobname_default = self.script_path.stem + "_" + self.precision + "_" + self.backend
+
+        
         log.info("Build slurm script")
         preamble, body = self.prep_preamble_and_body()
 
@@ -206,8 +226,8 @@ class SlurmScript:
 
         except subprocess.CalledProcessError as error:
             log.info("sbatch submission failed.")
-            log.info("Exit code:", error.returncode)
-            log.info("Error:", error.stderr.strip())
+            log.info(f"Exit code: {error.returncode}")
+            log.info(f"Error: {error.stderr.strip()}")
 
     def save(self):
         derived_name = self.jobname_default + ".slurm"
@@ -220,7 +240,7 @@ class SlurmScript:
 @click.option(
     "--precision",
     default="",
-    type=click.Choice(["single", "mixed", "double"]),
+    type=click.Choice(["single", "mixed", "double", ""]),
     help="The floating-point precision to use, default=double.",
 )
 @click.option(
@@ -257,17 +277,16 @@ def main(
     force: bool
 ):
     sls = SlurmScript(scriptname, backend, precision, dry_run)
-    sls.build_slurm_script()
 
     collected_logs=get_log_history()
     str_for_pager = collected_logs + f"{'#'*10} begin slurm script:{'#'*10}\n\n" + sls.slurm_script
 
     if dry_run:
+        if save and force:
+            sls.save()
+            return
         click.echo_via_pager(str_for_pager)
         if save:
-            if force:
-                sls.save()
-                return
             in_str = input("Ok with that? [y]\n")
             if not "y" in in_str and in_str != "":
                 log.info("Not saved.")
@@ -298,4 +317,3 @@ def main(
 
 if __name__ == "__main__":
     main()
-
