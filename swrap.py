@@ -64,7 +64,7 @@ class SlurmScript:
     def prep_preamble_and_body(self) -> tuple[str, str]:
         reg_lines, preamble_lines = [],[]
         [(reg_lines, preamble_lines)[line[:7] in ["#SBATCH","#SWRAP_"]].append(line) for line in self.raw_script.split("\n")]
-        shebang = "" if reg_lines[0][:3] != "#!/" else reg_lines.pop(0)
+        shebang = "#!/bin/bash" if reg_lines[0][:3] != "#!/" else reg_lines.pop(0)
         body = "\n".join(reg_lines)
 
         sbatch_lines = self.extract_swrap_and_env_vars(preamble_lines)
@@ -99,10 +99,10 @@ class SlurmScript:
 
     def set_defaults(self, sbatch_dict: dict):
         sbatch_dict.setdefault("uenv", os.environ["SBATCH_UENV"])
-        view_from_env_var = os.environ["SBATCH_UENV_VIEW"]
+        view_from_env_var = os.environ.get("SBATCH_UENV_VIEW")
         if view_from_env_var == "none":
-            del os.environ["SBATCH_UENV_VIEW"]
-        else:
+            os.environ.pop("SBATCH_UENV_VIEW", None)
+        elif view_from_env_var is not None:
             sbatch_dict.setdefault("view", view_from_env_var)
         sbatch_dict.setdefault("job-name", self.jobname_default)
         sbatch_dict.setdefault("output", sbatch_dict["job-name"] + "_%j.out")
