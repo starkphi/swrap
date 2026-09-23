@@ -9,5 +9,10 @@ export ICON4PY_PATH=$SCRATCH/icon4py
 export SBATCH_UENV=icon/26.7:rc1
 export SBATCH_UENV_VIEW=none
 
-uenv run $SBATCH_UENV -- "$ICON4PY_PATH/.venv/bin/python" "$SCRIPT_DIR/swrap.py" "$@"
+# `uenv run` refuses to nest, so reuse the session when one is already active
+if [[ -n "${UENV_MOUNT_LIST:-}${UENV_VIEW:-}" ]]; then
+    "$ICON4PY_PATH/.venv/bin/python" "$SCRIPT_DIR/swrap.py" "$@"
+else
+    uenv run $SBATCH_UENV -- "$ICON4PY_PATH/.venv/bin/python" "$SCRIPT_DIR/swrap.py" "$@"
+fi
 
