@@ -5,9 +5,18 @@ set -euo pipefail
 # SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)"
 
-export ICON4PY_PATH=$SCRATCH/icon4py
-export SBATCH_UENV=icon/26.7:rc1
-export SBATCH_UENV_VIEW=none
+# Defaults per machine from machines/$CLUSTER_NAME.env, then the generic ones below.
+# Anything already set in the environment wins over both.
+MACHINE_ENV="$SCRIPT_DIR/machines/${CLUSTER_NAME:-unknown}.env"
+if [[ -f "$MACHINE_ENV" ]]; then
+    source "$MACHINE_ENV"
+else
+    echo "swrap: no $MACHINE_ENV, using generic defaults" >&2
+fi
+: "${ICON4PY_PATH:=$SCRATCH/icon4py}"
+: "${SBATCH_UENV:=icon/26.7:rc1}"
+: "${SBATCH_UENV_VIEW:=none}"
+export ICON4PY_PATH SBATCH_UENV SBATCH_UENV_VIEW
 
 # `uenv run` refuses to nest, so reuse the session when one is already active
 if [[ -n "${UENV_MOUNT_LIST:-}${UENV_VIEW:-}" ]]; then

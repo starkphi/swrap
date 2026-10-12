@@ -18,8 +18,13 @@ swrap SCRIPT [--backend=...] [--precision=...] [--dry_run] [--save] [-f/--force]
 | `--save` | write the script as `<job-name>.slurm` | off |
 | `--force` | skip confirmation prompts | off |
 
-The `swrap` wrapper runs `swrap.py` inside the uenv defined there (`SBATCH_UENV`,
-`SBATCH_UENV_VIEW`, `ICON4PY_PATH`).
+The `swrap` wrapper runs `swrap.py` inside the uenv given by `SBATCH_UENV` and
+`SBATCH_UENV_VIEW`, with the Python of `$ICON4PY_PATH/.venv`. Each variable is taken, in
+decreasing priority, from the calling environment, from `machines/$CLUSTER_NAME.env`, or from the
+generic default in `swrap` (`ICON4PY_PATH=$SCRATCH/icon4py`, `icon/26.7:rc1`, view `none`).
+To support a new machine, add `machines/<cluster>.env`. A template that needs another icon4py
+checkout sets `export ICON4PY_PATH=...` in its body; that applies to the job, not to the Python
+that runs `swrap.py`.
 
 ## Template format
 
